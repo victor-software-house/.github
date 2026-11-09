@@ -1,21 +1,21 @@
-Closes #
+<!-- Link the issue this closes in the Development sidebar, so the merge closes it. -->
 
-## Why
+## Reason
 
-<!-- The problem or goal this change serves. -->
+<!-- The problem or goal behind this change, with a link to the issue or discussion. -->
 
-## What changed
+## Change
 
 <!-- The change in a few lines, not a list of files. -->
 
-## How it was verified
+## Verification
 
-<!-- Commands run, CI results, or what you checked by hand. -->
+<!-- Commands run, CI results, or checks done by hand. -->
 
 <!-- Optional: for a visible change, add a "## Screenshots" section here. -->
 
 ## Checklist
 
-- [ ] The title is a Conventional Commit (`type: summary`); the squash merge uses it
+- [ ] The title is a Conventional Commit (`type: summary`), and the squash merge takes it as the commit message
 - [ ] `README.md` and `AGENTS.md` still describe the repository
 - [ ] No secrets, tokens or credentials
