@@ -1,6 +1,6 @@
 <!-- Link the issue this closes in the Development sidebar, so the merge closes it. -->
 
-## Reason
+## Motivation
 
 <!-- The problem or goal behind this change, with a link to the issue or discussion. -->
 
