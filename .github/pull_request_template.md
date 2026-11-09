@@ -16,6 +16,6 @@
 
 ## Checklist
 
-- [ ] The title is a Conventional Commit (`type: summary`), and the squash merge takes it as the commit message
+- [ ] The title is a Conventional Commit (`type: summary`)
 - [ ] `README.md` and `AGENTS.md` still describe the repository
 - [ ] No secrets, tokens or credentials
