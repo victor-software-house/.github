@@ -5,4 +5,4 @@ GitHub fills it into every new pull request in a repository of the organization 
 
 1. The repository must stay public for GitHub to apply the template, so it holds nothing private: no people, plans, boards, or links to private repositories.
 2. A repository's own `.github/pull_request_template.md` overrides the default.
-3. Changes reach `main` through a pull request, merged by squash.
+3. Changes reach `main` through a pull request, merged with a merge commit.
