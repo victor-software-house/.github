@@ -62,7 +62,7 @@ jobs:
             for (const place of places) {
               try {
                 const { data } = await github.rest.repos.getContent(place);
-                template = { text: Buffer.from(data.content, 'base64').toString('utf8'), from: `${place.repo}/${place.path}` };
+                template = { text: Buffer.from(data.content, 'base64').toString('utf8'), url: data.html_url };
                 break;
               } catch (error) {
                 if (error.status !== 404) throw error;
@@ -73,38 +73,72 @@ jobs:
               return;
             }
 
-            // `##` sections outside code fences, with HTML comments removed.
+            // `##` sections outside code fences and HTML comments. A section keeps
+            // its text without comments, and its first comment as the template's guidance.
             const sections = (text) => {
               const found = [];
               let fence = false;
-              for (const line of text.replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)) {
-                if (/^\s*(```|~~~)/.test(line)) fence = !fence;
-                const heading = !fence && /^##\s+(.+?)\s*#*\s*$/.exec(line);
-                if (heading) found.push({ title: heading[1].toLowerCase(), name: heading[1], lines: [] });
-                else if (found.length) found[found.length - 1].lines.push(line);
+              let comment = false;
+              for (const line of text.split(/\r?\n/)) {
+                let visible = '';
+                let note = '';
+                for (let rest = line; rest; ) {
+                  const mark = rest.indexOf(comment ? '-->' : '<!--');
+                  const part = mark < 0 ? rest : rest.slice(0, mark);
+                  if (comment) note += part;
+                  else visible += part;
+                  if (mark < 0) break;
+                  rest = rest.slice(mark + (comment ? 3 : 4));
+                  comment = !comment;
+                }
+                if (!comment && !note && /^\s*(```|~~~)/.test(visible)) fence = !fence;
+                const heading = !fence && /^##\s+(.+?)\s*#*\s*$/.exec(visible);
+                if (heading) {
+                  found.push({ title: heading[1].toLowerCase(), name: heading[1], lines: [], guidance: [] });
+                } else if (found.length) {
+                  const section = found[found.length - 1];
+                  section.lines.push(visible);
+                  if (note.trim()) section.guidance.push(note.trim());
+                }
               }
               return found;
             };
+
             const body = sections(pr.body ?? '');
             const problems = [];
             let at = 0;
+            let previous;
             for (const want of sections(template.text)) {
+              const hint = want.guidance.length ? ` The template asks for: ${want.guidance[0]}` : '';
               const index = body.findIndex((have, i) => i >= at && have.title === want.title);
               if (index < 0) {
-                problems.push(`Section "## ${want.name}" is missing, or out of the template's order.`);
-                continue;
+                const earlier = body.findIndex((have) => have.title === want.title);
+                if (earlier >= 0) {
+                  problems.push(`Move "## ${want.name}" after "## ${previous}", the template's order.`);
+                } else {
+                  const place = previous ? `after "## ${previous}"` : 'as the first section';
+                  problems.push(`Add a "## ${want.name}" section ${place}.${hint}`);
+                }
+              } else {
+                at = index + 1;
+                if (!body[index].lines.join('\n').trim()) {
+                  problems.push(`Write the "## ${want.name}" section: it holds no text outside comments.${hint}`);
+                }
               }
-              at = index + 1;
-              if (!body[index].lines.join('\n').trim()) {
-                problems.push(`Section "## ${want.name}" is empty.`);
-              }
+              previous = want.name;
             }
 
             if (problems.length) {
               for (const problem of problems) core.error(problem);
+              await core.summary
+                .addRaw(`This pull request body does not follow the [pull request template](${template.url}).\n\n`)
+                .addList(problems)
+                .addRaw('Edit the body, then rerun this job. An edit alone does not run it again.\n')
+                .write();
               core.setFailed(
-                `The body does not fill ${template.from}: ${problems.length} problem(s). Edit the body, then rerun this job.`,
+                `This pull request body does not follow the template at ${template.url}: ` +
+                  `${problems.length} ${problems.length === 1 ? 'section' : 'sections'} to fix. Edit the body, then rerun this job; an edit alone does not run it again.`,
               );
             } else {
-              core.info(`The body fills ${template.from}.`);
+              core.info(`The body follows the template at ${template.url}.`);
             }
