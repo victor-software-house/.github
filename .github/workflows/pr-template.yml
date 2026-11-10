@@ -1,0 +1,110 @@
+# The organization ruleset "main: pull request before merge (code repos)"
+# runs this workflow in every repository it covers. A pull request passes when
+# its body fills the repository's pull request template, or this repository's
+# default when it has none. Every `##` heading the template holds outside an
+# HTML comment is a required section: the body has it, in the template's
+# order, with text of its own. The template's comments are guidance, so they
+# never count as that text, and a section a comment offers is optional.
+# Sections the template does not name are allowed. A pull request an app
+# opens, such as a Version PR, passes: its body is generated.
+#
+# A ruleset runs it only on opened, synchronize, reopened and merge_group, so
+# an edit to the body does not run it again: rerun the failed job instead. The
+# check reads the body through the API, so a rerun sees the edited text.
+name: PR template
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  body:
+    name: PR template
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the body against the template
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            if (context.eventName !== 'pull_request') {
+              core.info('A merge group carries no body. Each of its pull requests passed this check.');
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            if (pr.user.type === 'Bot') {
+              core.info(`${pr.user.login} is an app; its body is generated.`);
+              return;
+            }
+
+            // GitHub's single-template locations, then the organization default.
+            const places = ['.github/', '', 'docs/'].flatMap((dir) =>
+              ['pull_request_template.md', 'PULL_REQUEST_TEMPLATE.md'].map((name) => ({
+                owner,
+                repo,
+                path: dir + name,
+                ref: pr.base.ref,
+              })),
+            );
+            places.push({ owner, repo: '.github', path: '.github/pull_request_template.md' });
+
+            let template;
+            for (const place of places) {
+              try {
+                const { data } = await github.rest.repos.getContent(place);
+                template = { text: Buffer.from(data.content, 'base64').toString('utf8'), from: `${place.repo}/${place.path}` };
+                break;
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            }
+            if (!template) {
+              core.setFailed('No pull request template found, in this repository or in the organization default.');
+              return;
+            }
+
+            // `##` sections outside code fences, with HTML comments removed.
+            const sections = (text) => {
+              const found = [];
+              let fence = false;
+              for (const line of text.replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)) {
+                if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+                const heading = !fence && /^##\s+(.+?)\s*#*\s*$/.exec(line);
+                if (heading) found.push({ title: heading[1].toLowerCase(), name: heading[1], lines: [] });
+                else if (found.length) found[found.length - 1].lines.push(line);
+              }
+              return found;
+            };
+            const body = sections(pr.body ?? '');
+            const problems = [];
+            let at = 0;
+            for (const want of sections(template.text)) {
+              const index = body.findIndex((have, i) => i >= at && have.title === want.title);
+              if (index < 0) {
+                problems.push(`Section "## ${want.name}" is missing, or out of the template's order.`);
+                continue;
+              }
+              at = index + 1;
+              if (!body[index].lines.join('\n').trim()) {
+                problems.push(`Section "## ${want.name}" is empty.`);
+              }
+            }
+
+            if (problems.length) {
+              for (const problem of problems) core.error(problem);
+              core.setFailed(
+                `The body does not fill ${template.from}: ${problems.length} problem(s). Edit the body, then rerun this job.`,
+              );
+            } else {
+              core.info(`The body fills ${template.from}.`);
+            }
