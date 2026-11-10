@@ -13,9 +13,3 @@
 <!-- Commands run, CI results, or checks done by hand. -->
 
 <!-- Optional: for a visible change, add a "## Screenshots" section here. -->
-
-## Checklist
-
-- [ ] The title is a Conventional Commit (`type: summary`)
-- [ ] `README.md` and `AGENTS.md` still describe the repository
-- [ ] No secrets, tokens or credentials
