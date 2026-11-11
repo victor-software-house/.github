@@ -24,7 +24,9 @@ permissions:
 jobs:
   body:
     name: PR template
-    runs-on: ubuntu-latest
+    # A Namespace runner, so the check does not depend on the organization's
+    # GitHub-hosted minutes (operator, 2026-11-11).
+    runs-on: nscloud-ubuntu-24.04-amd64-2x4
     timeout-minutes: 5
     steps:
       - name: Check the body against the template
