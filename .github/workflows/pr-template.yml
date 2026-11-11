@@ -148,9 +148,9 @@ jobs:
 
 
   # Lints the title and body with Vale and the ProseStyle and PullRequestStyle
-  # packages. A repository changes levels for its pull requests alone in
-  # .github/pr-prose.ini on the base branch, in [*.pr-title] and [*.pr-body]
-  # sections; its own .vale.ini never applies here. The check run "PR prose
+  # packages, with the same levels in every repository: a repository's own
+  # .vale.ini never applies here, and no repository overrides a level until
+  # the check moves to hakkiri (operator, 2026-11-11). The check run "PR prose
   # findings" lists every alert: it fails on an error, is neutral on warnings
   # and suggestions, and passes on none. This job fails on an error only.
   prose:
@@ -200,24 +200,9 @@ jobs:
               pull_number: context.payload.pull_request.number,
             });
 
-            // The repository's sections, from the base branch, so a pull request
-            // cannot loosen the rules it is checked by.
-            let local = '';
-            try {
-              const { data } = await github.rest.repos.getContent({
-                owner,
-                repo,
-                path: '.github/pr-prose.ini',
-                ref: pr.base.sha,
-              });
-              local = Buffer.from(data.content, 'base64').toString('utf8');
-              core.info('.github/pr-prose.ini on the base branch adds its sections.');
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
             fs.writeFileSync(
               path.join(dir, '.vale.ini'),
-              `StylesPath = styles\nMinAlertLevel = suggestion\nPackages = ${process.env.PACKAGES}\n\n${local}\n`,
+              `StylesPath = styles\nMinAlertLevel = suggestion\nPackages = ${process.env.PACKAGES}\n`,
             );
 
             const entities = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", '#x27': "'" };
@@ -287,8 +272,8 @@ jobs:
             } catch {
               report = null;
             }
-            // A runtime error, such as a bad section in .github/pr-prose.ini,
-            // prints one object with a Code instead of alerts per file.
+            // A runtime error prints one object with a Code instead of alerts
+            // per file.
             if (!report || report.Code) {
               core.setFailed(`Vale did not run: ${report?.Text ?? (run.stderr || run.stdout)}`);
               return;
@@ -329,8 +314,7 @@ jobs:
               ? `${errors} errors, ${warnings} warnings, ${suggestions} suggestions`
               : 'No alerts';
             const help =
-              'Edit the title or body, then rerun the PR prose job; an edit alone does not run it again. ' +
-              'A repository changes a level for its pull requests in `.github/pr-prose.ini`, in `[*.pr-title]` and `[*.pr-body]` sections.';
+              'Edit the title or body, then rerun the PR prose job; an edit alone does not run it again.';
             const summary = `${table}\n\n${help}\n`;
 
             await github.rest.checks.create({
