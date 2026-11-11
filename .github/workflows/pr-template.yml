@@ -145,3 +145,205 @@ jobs:
             } else {
               core.info(`The body follows the template at ${template.url}.`);
             }
+
+
+  # Lints the title and body with Vale and the ProseStyle and PullRequestStyle
+  # packages. A repository changes levels for its pull requests alone in
+  # .github/pr-prose.ini on the base branch, in [*.pr-title] and [*.pr-body]
+  # sections; its own .vale.ini never applies here. The check run "PR prose
+  # findings" lists every alert: it fails on an error, is neutral on warnings
+  # and suggestions, and passes on none. This job fails on an error only.
+  prose:
+    name: PR prose
+    runs-on: ${{ github.event.repository.private && 'nscloud-ubuntu-26.04-amd64-2x4' || 'ubuntu-26.04' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      # The "PR prose findings" check run.
+      checks: write
+    env:
+      VALE_VERSION: 3.26.0
+      # vale_3.26.0_checksums.txt, Linux_64-bit.
+      VALE_SHA256: 22aa69a556558e4a9dfc63c17030777383d8d3c48dcdfad655fa98e839d666ed
+      PACKAGES: >-
+        https://github.com/victor-software-house/prose-style/releases/download/v0.0.14/ProseStyle.zip,
+        https://github.com/victor-software-house/prose-style/releases/download/v0.0.15/PullRequestStyle.zip
+    steps:
+      # A merge group carries no title or body, and an app's text is generated.
+      - name: Skip a merge group or an app
+        id: scope
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
+        run: echo "lint=true" >> "$GITHUB_OUTPUT"
+      - name: Install Vale
+        if: steps.scope.outputs.lint
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/vale.tar.gz" \
+            "https://github.com/vale-cli/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz"
+          echo "${VALE_SHA256}  $RUNNER_TEMP/vale.tar.gz" | sha256sum --check --quiet -
+          tar -xzf "$RUNNER_TEMP/vale.tar.gz" -C "$RUNNER_TEMP" vale
+      - name: Check the title and body
+        if: steps.scope.outputs.lint
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { owner, repo } = context.repo;
+            const dir = path.join(process.env.RUNNER_TEMP, 'prose');
+            fs.mkdirSync(dir, { recursive: true });
+
+            // Read through the API, so a rerun sees an edited title or body.
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            // The repository's sections, from the base branch, so a pull request
+            // cannot loosen the rules it is checked by.
+            let local = '';
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path: '.github/pr-prose.ini',
+                ref: pr.base.sha,
+              });
+              local = Buffer.from(data.content, 'base64').toString('utf8');
+              core.info('.github/pr-prose.ini on the base branch adds its sections.');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            fs.writeFileSync(
+              path.join(dir, '.vale.ini'),
+              `StylesPath = styles\nMinAlertLevel = suggestion\nPackages = ${process.env.PACKAGES}\n\n${local}\n`,
+            );
+
+            const entities = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", '#x27': "'" };
+            const decode = (s) => s.replace(/&(amp|lt|gt|quot|#39|#x27);/g, (_, e) => entities[e]);
+            const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            // Writes each reference GitHub turns into a link, such as #12,
+            // owner/repo#12, an autolinked VER-117 or @someone, as a Markdown
+            // link, so the rules read it as one. A reference GitHub leaves as
+            // text stays bare, and so do a pasted URL and text in code, in a
+            // link or in an HTML tag.
+            const linkify = async (text) => {
+              if (!text.trim()) return text;
+              const { data: html } = await github.rest.markdown.render({
+                text,
+                mode: 'gfm',
+                context: `${owner}/${repo}`,
+              });
+              const links = new Map();
+              for (const [, href, label] of html.matchAll(/<a\s[^>]*?href="([^"]+)"[^>]*>([^<]+)<\/a>/g)) {
+                const name = decode(label).trim();
+                if (name && !/^[a-z]+:\/\//i.test(name) && decode(href) !== name) links.set(name, decode(href));
+              }
+              if (!links.size) return text;
+              const names = [...links.keys()].sort((a, b) => b.length - a.length).map(escape);
+              const bare = new RegExp(`(?<![\\w/\\[-])(${names.join('|')})(?![\\w-])`, 'g');
+              const link = (part) => part.replace(bare, (name) => `[${name}](${links.get(name)})`);
+              const kept = /(`+)[\s\S]*?\1|!?\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\[[^\]]*\]|<[^>\n]+>/g;
+              let fence = null;
+              return text
+                .split('\n')
+                .map((line) => {
+                  const mark = /^\s*(`{3,}|~{3,})/.exec(line);
+                  if (fence) {
+                    if (mark && mark[1][0] === fence[0] && mark[1].length >= fence.length) fence = null;
+                    return line;
+                  }
+                  if (mark) {
+                    fence = mark[1];
+                    return line;
+                  }
+                  let out = '';
+                  let at = 0;
+                  for (const m of line.matchAll(kept)) {
+                    out += link(line.slice(at, m.index)) + m[0];
+                    at = m.index + m[0].length;
+                  }
+                  return out + link(line.slice(at));
+                })
+                .join('\n');
+            };
+
+            const files = { 'title.pr-title': 'title', 'body.pr-body': 'body' };
+            fs.writeFileSync(path.join(dir, 'title.pr-title'), `${await linkify(pr.title)}\n`);
+            fs.writeFileSync(path.join(dir, 'body.pr-body'), `${await linkify((pr.body ?? '').replace(/\r\n/g, '\n'))}\n`);
+
+            const vale = path.join(process.env.RUNNER_TEMP, 'vale');
+            await exec.exec(vale, ['sync'], { cwd: dir });
+            const run = await exec.getExecOutput(vale, ['--output', 'JSON', ...Object.keys(files)], {
+              cwd: dir,
+              ignoreReturnCode: true,
+              silent: true,
+            });
+            let report;
+            try {
+              report = JSON.parse(run.stdout || '{}');
+            } catch {
+              report = null;
+            }
+            // A runtime error, such as a bad section in .github/pr-prose.ini,
+            // prints one object with a Code instead of alerts per file.
+            if (!report || report.Code) {
+              core.setFailed(`Vale did not run: ${report?.Text ?? (run.stderr || run.stdout)}`);
+              return;
+            }
+
+            const order = { error: 0, warning: 1, suggestion: 2 };
+            const alerts = Object.entries(report)
+              .flatMap(([file, list]) =>
+                list.map((a) => ({
+                  where: files[path.basename(file)] === 'title' ? 'title' : `body line ${a.Line}`,
+                  level: a.Severity,
+                  rule: a.Check,
+                  message: a.Message,
+                })),
+              )
+              .sort((a, b) => order[a.level] - order[b.level]);
+            const count = (level) => alerts.filter((a) => a.level === level).length;
+            const errors = count('error');
+            const warnings = count('warning');
+            const suggestions = count('suggestion');
+
+            for (const a of alerts) {
+              const line = `${a.where}: ${a.message} (${a.rule})`;
+              if (a.level === 'error') core.error(line);
+              else if (a.level === 'warning') core.warning(line);
+              else core.notice(line);
+            }
+
+            const cell = (s) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+            const table = alerts.length
+              ? [
+                  '| Where | Level | Rule | Message |',
+                  '|:--|:--|:--|:--|',
+                  ...alerts.map((a) => `| ${a.where} | ${a.level} | \`${a.rule}\` | ${cell(a.message)} |`),
+                ].join('\n')
+              : 'No alerts.';
+            const title = alerts.length
+              ? `${errors} errors, ${warnings} warnings, ${suggestions} suggestions`
+              : 'No alerts';
+            const help =
+              'Edit the title or body, then rerun the PR prose job; an edit alone does not run it again. ' +
+              'A repository changes a level for its pull requests in `.github/pr-prose.ini`, in `[*.pr-title]` and `[*.pr-body]` sections.';
+            const summary = `${table}\n\n${help}\n`;
+
+            await github.rest.checks.create({
+              owner,
+              repo,
+              name: 'PR prose findings',
+              head_sha: pr.head.sha,
+              status: 'completed',
+              conclusion: errors ? 'failure' : alerts.length ? 'neutral' : 'success',
+              output: { title, summary: summary.slice(0, 65000) },
+            });
+            await core.summary.addRaw(summary).write();
+
+            if (errors) {
+              core.setFailed(`${title} in the title or body. Edit them, then rerun this job; an edit alone does not run it again.`);
+            }
