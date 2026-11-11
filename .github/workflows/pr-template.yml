@@ -24,7 +24,10 @@ permissions:
 jobs:
   body:
     name: PR template
-    runs-on: ubuntu-latest
+    # A public repository runs it on GitHub's hosted runners, which are free.
+    # A private one runs it on Namespace, because the organization's
+    # GitHub-hosted minutes for private repositories are not available.
+    runs-on: ${{ github.event.repository.private && 'nscloud-ubuntu-24.04-amd64-2x4' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Check the body against the template
