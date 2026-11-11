@@ -10,7 +10,9 @@
 #
 # A ruleset runs it only on opened, synchronize, reopened and merge_group, so
 # an edit to the body does not run it again: rerun the failed job instead. The
-# check reads the body through the API, so a rerun sees the edited text.
+# check reads the body through the API, so a rerun sees the edited text. The
+# workflow lives in this repository, so `gh run rerun` in another one fails
+# with 404; the REST endpoint for the run and the Re-run button both work.
 name: PR template
 
 on:
@@ -40,6 +42,11 @@ jobs:
             }
 
             const { owner, repo } = context.repo;
+            const rerun =
+              `Edit the body, then rerun this run with the Re-run button on ` +
+              `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}, or with ` +
+              `\`gh api -X POST repos/${owner}/${repo}/actions/runs/${context.runId}/rerun\`. ` +
+              'An edit alone does not run it again.';
             const { data: pr } = await github.rest.pulls.get({
               owner,
               repo,
@@ -136,11 +143,11 @@ jobs:
               await core.summary
                 .addRaw(`This pull request body does not follow the [pull request template](${template.url}).\n\n`)
                 .addList(problems)
-                .addRaw('Edit the body, then rerun this job. An edit alone does not run it again.\n')
+                .addRaw(`${rerun}\n`)
                 .write();
               core.setFailed(
                 `This pull request body does not follow the template at ${template.url}: ` +
-                  `${problems.length} ${problems.length === 1 ? 'section' : 'sections'} to fix. Edit the body, then rerun this job; an edit alone does not run it again.`,
+                  `${problems.length} ${problems.length === 1 ? 'section' : 'sections'} to fix. ${rerun}`,
               );
             } else {
               core.info(`The body follows the template at ${template.url}.`);
@@ -314,7 +321,10 @@ jobs:
               ? `${errors} errors, ${warnings} warnings, ${suggestions} suggestions`
               : 'No alerts';
             const help =
-              'Edit the title or body, then rerun the PR prose job; an edit alone does not run it again.';
+              `After an edit to the title or body, rerun this run with the Re-run button on ` +
+              `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}, or with ` +
+              `\`gh api -X POST repos/${owner}/${repo}/actions/runs/${context.runId}/rerun\`. ` +
+              'An edit alone does not run it again.';
             const summary = `${table}\n\n${help}\n`;
 
             await github.rest.checks.create({
@@ -329,5 +339,5 @@ jobs:
             await core.summary.addRaw(summary).write();
 
             if (errors) {
-              core.setFailed(`${title} in the title or body. Edit them, then rerun this job; an edit alone does not run it again.`);
+              core.setFailed(`${title} in the title or body. ${help}`);
             }
