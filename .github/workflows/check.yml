@@ -1,0 +1,68 @@
+# Checks this repository's own workflows on each pull request. The organization
+# ruleset runs pr-template.yml from main, so a pull request here never runs the
+# copy it changes; this workflow runs from the pull request's branch instead.
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  workflows:
+    name: Workflow check
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      # actionlint_1.7.12_checksums.txt, linux_amd64.
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check --quiet -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+      - name: Lint the workflows
+        run: '"$RUNNER_TEMP/actionlint" -color'
+      # actionlint reads no JavaScript. Each `script: |` block of
+      # actions/github-script is compiled, not run, the way that action wraps
+      # it: as the body of an async function.
+      - name: Compile the github-script steps
+        run: |
+          node --input-type=module <<'JS'
+          import { readdirSync, readFileSync } from 'node:fs';
+          const AsyncFunction = (async () => {}).constructor;
+          let failed = 0;
+          for (const name of readdirSync('.github/workflows').filter((f) => /\.ya?ml$/.test(f))) {
+            const lines = readFileSync(`.github/workflows/${name}`, 'utf8').split('\n');
+            lines.forEach((line, at) => {
+              const head = /^(\s*)script:\s*\|/.exec(line);
+              if (!head) return;
+              const body = [];
+              let indent;
+              for (const next of lines.slice(at + 1)) {
+                if (next.trim() === '') { body.push(''); continue; }
+                const lead = next.length - next.trimStart().length;
+                if (lead <= head[1].length) break;
+                indent ??= lead;
+                body.push(next.slice(indent));
+              }
+              try {
+                new AsyncFunction('require', 'github', 'context', 'core', 'exec', 'glob', 'io', 'fetch', body.join('\n'));
+                console.log(`ok ${name}:${at + 1}`);
+              } catch (error) {
+                failed += 1;
+                console.log(`::error file=.github/workflows/${name},line=${at + 1}::${error.message}`);
+              }
+            });
+          }
+          process.exit(failed ? 1 : 0);
+          JS
