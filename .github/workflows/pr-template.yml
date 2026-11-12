@@ -66,7 +66,6 @@ jobs:
                 ref: pr.base.ref,
               })),
             );
-            places.push({ owner, repo: '.github', path: '.github/pull_request_template.md' });
 
             let template;
             for (const place of places) {
@@ -76,6 +75,21 @@ jobs:
                 break;
               } catch (error) {
                 if (error.status !== 404) throw error;
+              }
+            }
+            // The organization default lives in the public .github repository.
+            // A private repository's GITHUB_TOKEN cannot read another
+            // repository through the API, so fetch the file without a token.
+            if (!template) {
+              const path = `${owner}/.github/HEAD/.github/pull_request_template.md`;
+              const response = await fetch(`https://raw.githubusercontent.com/${path}`);
+              if (response.ok) {
+                template = {
+                  text: await response.text(),
+                  url: `${context.serverUrl}/${owner}/.github/blob/HEAD/.github/pull_request_template.md`,
+                };
+              } else if (response.status !== 404) {
+                throw new Error(`organization default template: HTTP ${response.status}`);
               }
             }
             if (!template) {
