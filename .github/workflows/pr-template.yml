@@ -263,7 +263,14 @@ jobs:
             };
 
             const files = { 'title.pr-title': 'title', 'body.pr-body': 'body' };
-            fs.writeFileSync(path.join(dir, 'title.pr-title'), `${await linkify(pr.title)}\n`);
+            // A title cannot hold a link, and by house convention it ends with
+            // the queue rows it closes, as in `fix: keep a comma (VER-117)`.
+            // Those trailing ids read as code; a bare id elsewhere stays an error.
+            const title = pr.title.replace(
+              /\(((?:[A-Z][A-Z0-9]{1,6}-\d+)(?:,\s*[A-Z][A-Z0-9]{1,6}-\d+)*)\)\s*$/,
+              (_, ids) => `(${ids.split(/,\s*/).map((id) => `\`${id}\``).join(', ')})`,
+            );
+            fs.writeFileSync(path.join(dir, 'title.pr-title'), `${await linkify(title)}\n`);
             fs.writeFileSync(path.join(dir, 'body.pr-body'), `${await linkify((pr.body ?? '').replace(/\r\n/g, '\n'))}\n`);
 
             const vale = path.join(process.env.RUNNER_TEMP, 'vale');
